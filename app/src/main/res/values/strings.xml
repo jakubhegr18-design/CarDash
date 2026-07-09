@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">CarDash</string>
+    <string name="app_description">CarDash is a tablet launcher designed for back-seat entertainment in your car. Create separate profiles for each passenger, pin their favorite apps, and switch between them instantly. Features a clean car-friendly interface with large touch targets, quick settings (brightness, rotation, Bluetooth, WiFi), and one-tap navigation shortcuts to Maps, Waze, Spotify, and YouTube. Perfect for keeping passengers entertained on road trips with their own curated selection of apps.</string>
+</resources>
