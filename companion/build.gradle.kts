@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.cartablet"
+    namespace = "com.cartablet.companion"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.cartablet"
+        applicationId = "com.cartablet.companion"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -26,7 +26,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -50,6 +49,5 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons)
-    implementation(libs.coil.compose)
-    implementation(libs.nanohttpd)
+    implementation(libs.volley)
 }

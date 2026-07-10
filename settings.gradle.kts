@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "CarDash"
 include(":app")
+include(":companion")

@@ -22,6 +22,9 @@ class SettingsManager(private val prefs: SharedPreferences) {
         private const val KEY_PROFILE_LOCK = "profile_lock_enabled"
         private const val KEY_STRICT_LOCK_ENABLED = "strict_lock_enabled"
         private const val KEY_STRICT_LOCK_COLLECTIONS = "strict_lock_collections"
+        private const val KEY_REMOTE_CONTROL_ENABLED = "remote_control_enabled"
+        private const val KEY_REMOTE_CONTROL_PORT = "remote_control_port"
+        private const val KEY_TV_MODE = "tv_mode"
     }
 
     fun setPassword(password: String) {
@@ -84,4 +87,13 @@ class SettingsManager(private val prefs: SharedPreferences) {
 
     fun getStrictLockCollections(): Set<String> = prefs.getStringSet(KEY_STRICT_LOCK_COLLECTIONS, emptySet()) ?: emptySet()
     fun setStrictLockCollections(ids: Set<String>) = prefs.edit().putStringSet(KEY_STRICT_LOCK_COLLECTIONS, ids).apply()
+
+    fun isRemoteControlEnabled(): Boolean = prefs.getBoolean(KEY_REMOTE_CONTROL_ENABLED, false)
+    fun setRemoteControlEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_REMOTE_CONTROL_ENABLED, enabled).apply()
+
+    fun getRemoteControlPort(): Int = prefs.getInt(KEY_REMOTE_CONTROL_PORT, 8080)
+    fun setRemoteControlPort(port: Int) = prefs.edit().putInt(KEY_REMOTE_CONTROL_PORT, port).apply()
+
+    fun isTvModeEnabled(): Boolean = prefs.getBoolean(KEY_TV_MODE, false)
+    fun setTvModeEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_TV_MODE, enabled).apply()
 }

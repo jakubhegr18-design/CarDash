@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cartablet.CarLauncherApp
 import com.cartablet.data.SettingsManager
 import com.cartablet.data.ProfileManager
 import java.security.SecureRandom
@@ -53,6 +54,9 @@ fun SettingsScreen(
     var profileLockEnabled by remember { mutableStateOf(settingsManager.isProfileLockEnabled()) }
     var strictLockEnabled by remember { mutableStateOf(settingsManager.isStrictLockEnabled()) }
     var strictLockCollections by remember { mutableStateOf(settingsManager.getStrictLockCollections()) }
+    var remoteControlEnabled by remember { mutableStateOf(settingsManager.isRemoteControlEnabled()) }
+    var remoteControlPort by remember { mutableStateOf(settingsManager.getRemoteControlPort().toString()) }
+    var tvModeEnabled by remember { mutableStateOf(settingsManager.isTvModeEnabled()) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
 
     fun generateSecretKey() {
@@ -262,6 +266,60 @@ fun SettingsScreen(
                     onCheckedChange = {
                         clock24h = it
                         settingsManager.setClock24h(it)
+                    }
+                )
+            }
+
+            // REMOTE CONTROL SECTION
+            SettingsSection(title = "REMOTE CONTROL", icon = Icons.Filled.Cast) {
+                SettingsSwitchItem(
+                    title = "Enable Remote Control",
+                    description = "Allow phone app to control the dashboard over WiFi",
+                    checked = remoteControlEnabled,
+                    onCheckedChange = {
+                        remoteControlEnabled = it
+                        settingsManager.setRemoteControlEnabled(it)
+                        CarLauncherApp.instance.updateRemoteServer()
+                    }
+                )
+
+                if (remoteControlEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = remoteControlPort,
+                        onValueChange = {
+                            remoteControlPort = it
+                            it.toIntOrNull()?.let { port ->
+                                settingsManager.setRemoteControlPort(port)
+                                CarLauncherApp.instance.updateRemoteServer()
+                            }
+                        },
+                        label = { Text("Port") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    val ip = CarLauncherApp.instance.getLocalIpAddress()
+                    if (ip != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Connect at: http://$ip:$remoteControlPort",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            // TV MODE SECTION
+            SettingsSection(title = "TV MODE", icon = Icons.Filled.Tv) {
+                SettingsSwitchItem(
+                    title = "Android TV Mode",
+                    description = "Optimize UI for TV remote navigation (requires restart)",
+                    checked = tvModeEnabled,
+                    onCheckedChange = {
+                        tvModeEnabled = it
+                        settingsManager.setTvModeEnabled(it)
                     }
                 )
             }
