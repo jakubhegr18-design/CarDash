@@ -35,6 +35,9 @@ data class Profile(
     val icon: String = "\uD83D\uDC64",
     val iconUri: String? = null,
     val isGuest: Boolean = false,
+    val isKid: Boolean = false,
+    val isProtected: Boolean = false,
+    val parentId: String? = null,
     val pinnedApps: List<String> = emptyList(),
     val folders: List<Folder> = emptyList()
 ) {
@@ -44,6 +47,9 @@ data class Profile(
         put("icon", icon)
         put("iconUri", iconUri ?: JSONObject.NULL)
         put("isGuest", isGuest)
+        put("isKid", isKid)
+        put("isProtected", isProtected)
+        put("parentId", parentId ?: JSONObject.NULL)
         put("pinnedApps", JSONArray(pinnedApps))
         put("folders", JSONArray(folders.map { it.toJson() }))
     }
@@ -55,6 +61,9 @@ data class Profile(
             icon = obj.optString("icon", "\uD83D\uDC64"),
             iconUri = if (obj.isNull("iconUri")) null else obj.optString("iconUri"),
             isGuest = obj.optBoolean("isGuest", false),
+            isKid = obj.optBoolean("isKid", false),
+            isProtected = obj.optBoolean("isProtected", false),
+            parentId = if (obj.isNull("parentId")) null else obj.optString("parentId"),
             pinnedApps = obj.optJSONArray("pinnedApps")?.let { arr ->
                 (0 until arr.length()).map { arr.getString(it) }
             } ?: emptyList(),

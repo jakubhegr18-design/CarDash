@@ -1,12 +1,19 @@
 package com.cartablet.ui
 
+import android.Manifest
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.net.wifi.WifiManager
+import androidx.core.net.toUri
+import kotlin.time.Duration.Companion.seconds
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -32,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -48,17 +56,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.app.ActivityCompat
 import androidx.core.graphics.drawable.toBitmap
 import coil.compose.AsyncImage
 import com.cartablet.data.Profile
 import com.cartablet.data.ProfileManager
 import com.cartablet.data.SettingsManager
 import com.cartablet.data.Folder
+import com.cartablet.utils.TotpHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 private data class AppInfo(
     val packageName: String,
@@ -96,11 +107,14 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
     var pinnedFeedback by remember { mutableStateOf<String?>(null) }
     var showInAppSettings by remember { mutableStateOf(false) }
     var showLockDialog by remember { mutableStateOf(false) }
+    var showLockForProfileSwitch by remember { mutableStateOf(false) }
+    var pendingProfileSwitch by remember { mutableStateOf<Profile?>(null) }
     
     var activeFolder by remember { mutableStateOf<Folder?>(null) }
     var folderToEdit by remember { mutableStateOf<Folder?>(null) }
     var showFolderOptions by remember { mutableStateOf<Folder?>(null) }
 
+    var currentSpeed by remember { mutableIntStateOf(0) }
     val profProfiles = remember { mutableStateListOf<Profile>() }
 
     fun switchProfile(profile: Profile) {
@@ -119,7 +133,7 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                 showAllApps = false
             } else {
                 val playIntent = Intent(Intent.ACTION_VIEW).apply {
-                    data = Uri.parse("market://details?id=$pkgName")
+                    data = "market://details?id=$pkgName".toUri()
                 }
                 if (playIntent.resolveActivity(pm) != null) context.startActivity(playIntent)
             }
@@ -174,8 +188,49 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
         }
     }
 
+    DisposableEffect(settingsManager.isSpeedometerEnabled()) {
+        if (!settingsManager.isSpeedometerEnabled()) {
+            currentSpeed = 0
+            return@DisposableEffect onDispose {}
+        }
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                if (location.hasSpeed()) currentSpeed = (location.speed * 3.6).roundToInt()
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+        try {
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, listener)
+            }
+        } catch (e: Exception) {}
+        onDispose { lm.removeUpdates(listener) }
+    }
+
+    val isStrictLocked = settingsManager.isStrictLockEnabled()
+    val isKidsMode = settingsManager.isKidsModeEnabled() || currentProfile.isKid || isStrictLocked
+    
+    val restrictedFolderIds = if (isStrictLocked) settingsManager.getStrictLockCollections() else null
+    val restrictedFolders = if (isStrictLocked) {
+        currentProfile.folders.filter { it.id in (restrictedFolderIds ?: emptySet()) }
+    } else {
+        null
+    }
+
+    val restrictedFolderId = if (currentProfile.isKid) {
+        // For kid profiles, they might have their own specific collection or use a global one
+        settingsManager.getKidsModeCollectionId()
+    } else {
+        settingsManager.getKidsModeCollectionId()
+    }
+    val singleRestrictedFolder = currentProfile.folders.find { it.id == restrictedFolderId } ?: if (currentProfile.isKid) currentProfile.folders.firstOrNull() else null
+
     Box(modifier = Modifier.fillMaxSize()) {
-        if (settingsManager.isDashboardGlowEnabled()) BackgroundGlow(isDarkTheme)
+        if (settingsManager.isDashboardGlowEnabled()) BackgroundGlow(isDarkTheme, settingsManager.getWallpaperType())
         else Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
 
         Column(
@@ -184,10 +239,20 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 ProfileHeader(
                     profile = currentProfile,
-                    onSwitchClick = { showProfileSwitcher = true },
-                    onOpenGuide = { showGuide = true }
+                    onSwitchClick = { 
+                        if (isKidsMode || settingsManager.isProfileLockEnabled()) showLockForProfileSwitch = true 
+                        else showProfileSwitcher = true 
+                    },
+                    onOpenGuide = { if (!isKidsMode) showGuide = true },
+                    isLocked = isKidsMode
                 )
-                ClockWidget(settingsManager.isClock24h())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (settingsManager.isSpeedometerEnabled()) {
+                        SpeedometerWidget(speed = currentSpeed)
+                        Spacer(modifier = Modifier.width(24.dp))
+                    }
+                    ClockWidget(settingsManager.isClock24h())
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -196,25 +261,22 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                 brightness = brightness,
                 onBrightnessChange = { v ->
                     brightness = v
-                    (context as? Activity)?.window?.attributes = (context as? Activity)?.window?.attributes?.apply { screenBrightness = v }
+                    val activity = context as? Activity
+                    activity?.window?.attributes = activity?.window?.attributes?.apply { screenBrightness = v }
                 },
                 isBluetoothOn = isBluetoothOn,
                 onToggleBluetooth = {
+                    if (isKidsMode) return@QuickSettingsBar
                     try {
                         val bt = BluetoothAdapter.getDefaultAdapter()
                         if (bt != null) { 
-                            if (bt.isEnabled) {
-                                bt.disable()
-                                isBluetoothOn = false
-                            } else {
-                                bt.enable()
-                                isBluetoothOn = true
-                            }
+                            if (bt.isEnabled) { bt.disable(); isBluetoothOn = false } else { bt.enable(); isBluetoothOn = true }
                         }
                     } catch (_: SecurityException) {}
                 },
                 isWifiOn = isWifiOn,
                 onToggleWifi = {
+                    if (isKidsMode) return@QuickSettingsBar
                     try {
                         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
                         wifi.isWifiEnabled = !wifi.isWifiEnabled
@@ -222,42 +284,58 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                     } catch (_: Exception) {}
                 },
                 onOpenSettings = {
-                    if (settingsManager.isLockEnabled()) showLockDialog = true else showInAppSettings = true
+                    if (isKidsMode || settingsManager.isLockEnabled()) showLockDialog = true else showInAppSettings = true
                 },
                 isDarkTheme = isDarkTheme,
-                onThemeToggle = onThemeToggle
+                onThemeToggle = { if (!isKidsMode) onThemeToggle() }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             FolderSection(
-                folders = currentProfile.folders,
+                folders = if (isStrictLocked) {
+                    restrictedFolders ?: emptyList()
+                } else if (isKidsMode) {
+                    singleRestrictedFolder?.let { listOf(it) } ?: emptyList()
+                } else {
+                    currentProfile.folders
+                },
                 onFolderClick = { activeFolder = it },
-                onFolderLongClick = { showFolderOptions = it },
-                onAddFolderClick = { showAddFolder = true }
+                onFolderLongClick = { if (!isKidsMode) showFolderOptions = it },
+                onAddFolderClick = { if (!isKidsMode) showAddFolder = true }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             AppGridSection(
                 modifier = Modifier.weight(1f),
-                title = "Shortcuts",
-                apps = allApps.filter { it.packageName in currentProfile.pinnedApps },
+                title = if (isStrictLocked) "Lock Mode" else if (isKidsMode) "Kids Mode" else "Shortcuts",
+                apps = if (isStrictLocked) {
+                    val allowedPkgs = restrictedFolders?.flatMap { it.apps }?.toSet() ?: emptySet()
+                    allApps.filter { it.packageName in allowedPkgs }
+                } else if (isKidsMode) {
+                    singleRestrictedFolder?.let { f -> allApps.filter { it.packageName in f.apps } } ?: emptyList()
+                } else {
+                    allApps.filter { it.packageName in currentProfile.pinnedApps }
+                },
                 onAppClick = { launchApp(it.packageName) },
-                onAppLongClick = { togglePin(it.packageName) },
+                onAppLongClick = { if (!isKidsMode) togglePin(it.packageName) },
                 isPinned = { true },
-                isGuest = currentProfile.isGuest,
+                isGuest = currentProfile.isGuest || isKidsMode,
                 animationsEnabled = settingsManager.isAnimationEnabled()
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            NavigationDock(
-                onAppClick = { launchApp(it) },
-                onAllAppsClick = { showAllApps = true },
-                isAllAppsOpen = showAllApps,
-                animationsEnabled = settingsManager.isAnimationEnabled()
-            )
+            Box(modifier = Modifier.fillMaxWidth().height(90.dp), contentAlignment = Alignment.BottomCenter) {
+                VisualizerWidget()
+                NavigationDock(
+                    onAppClick = { launchApp(it) },
+                    onAllAppsClick = { if (!isKidsMode) showAllApps = true },
+                    isAllAppsOpen = showAllApps,
+                    animationsEnabled = settingsManager.isAnimationEnabled()
+                )
+            }
         }
 
         if (showAllApps) {
@@ -266,7 +344,7 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                 onClose = { showAllApps = false },
                 onAppClick = { launchApp(it.packageName) },
                 onAppLongClick = { togglePin(it.packageName) },
-                isPinned = { pkg -> currentProfile.pinnedApps.contains(pkg) }
+                isPinned = { pkg: String -> currentProfile.pinnedApps.contains(pkg) }
             )
         }
 
@@ -280,7 +358,8 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                 onAddApps = { 
                     folderToEdit = folder
                     activeFolder = null
-                }
+                },
+                isLocked = isKidsMode
             )
         }
 
@@ -297,10 +376,7 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                     }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { 
-                        folderToEdit = folder
-                        showFolderOptions = null 
-                    }) { Text("Edit Apps") }
+                    TextButton(onClick = { folderToEdit = folder; showFolderOptions = null }) { Text("Edit Apps") }
                 }
             )
         }
@@ -311,11 +387,8 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
                 selectedPkgs = folder.apps,
                 onClose = { folderToEdit = null },
                 onToggleApp = { pkg ->
-                    if (folder.apps.contains(pkg)) {
-                        profileManager.removeAppFromFolder(currentProfile.id, folder.id, pkg)
-                    } else {
-                        profileManager.addAppToFolder(currentProfile.id, folder.id, pkg)
-                    }
+                    if (folder.apps.contains(pkg)) profileManager.removeAppFromFolder(currentProfile.id, folder.id, pkg)
+                    else profileManager.addAppToFolder(currentProfile.id, folder.id, pkg)
                     currentProfile = profileManager.getCurrentProfile()
                     folderToEdit = currentProfile.folders.find { it.id == folder.id }
                 }
@@ -324,22 +397,64 @@ fun HomeScreen(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
 
         if (showGuide) QuickStartGuide(onDismiss = { showGuide = false })
         if (showInAppSettings) SettingsScreen(settingsManager, profileManager, onBack = { showInAppSettings = false })
-        if (showLockDialog) LockDialog(onSuccess = { showLockDialog = false; showInAppSettings = true }, onDismiss = { showLockDialog = false }, settingsManager = settingsManager)
+        if (showLockForProfileSwitch) LockDialog(
+            onSuccess = { showLockForProfileSwitch = false; showProfileSwitcher = true },
+            onDismiss = { showLockForProfileSwitch = false },
+            settingsManager = settingsManager
+        )
+        if (showLockDialog) LockDialog(onSuccess = { 
+            showLockDialog = false
+            if (isStrictLocked) settingsManager.setStrictLockEnabled(false)
+            if (settingsManager.isKidsModeEnabled()) settingsManager.setKidsModeEnabled(false)
+            showInAppSettings = true 
+        }, onDismiss = { showLockDialog = false }, settingsManager = settingsManager)
         
         if (showProfileSwitcher) {
             ProfileSwitcherDialog(
                 profiles = if (settingsManager.isHideGuestEnabled()) profProfiles.filter { !it.isGuest } else profProfiles.toList(),
                 currentId = currentProfile.id,
-                onSelect = { switchProfile(it); showProfileSwitcher = false },
+                onSelect = { 
+                    if (it.isProtected) {
+                        pendingProfileSwitch = it
+                        showProfileSwitcher = false
+                    } else {
+                        switchProfile(it)
+                        showProfileSwitcher = false
+                    }
+                },
                 onAddProfile = { showAddProfile = true },
-                onStartGuest = { val g = profileManager.createGuestProfile(); profProfiles.add(g); switchProfile(g); showProfileSwitcher = false },
+                onStartGuest = { 
+                    val g = profileManager.createGuestProfile()
+                    profProfiles.add(g)
+                    switchProfile(g)
+                    showProfileSwitcher = false 
+                },
                 onDeleteProfile = { showDeleteConfirm = it },
                 onDismiss = { showProfileSwitcher = false },
                 isGuestHidden = settingsManager.isHideGuestEnabled()
             )
         }
 
-        if (showAddProfile) AddProfileDialog(onConfirm = { n, e, u -> profileManager.addProfile(Profile(name = n, icon = e, iconUri = u?.toString())); refreshProfiles(); showAddProfile = false }, onDismiss = { showAddProfile = false })
+        pendingProfileSwitch?.let { target ->
+            LockDialog(
+                onSuccess = { 
+                    switchProfile(target)
+                    pendingProfileSwitch = null
+                },
+                onDismiss = { pendingProfileSwitch = null },
+                settingsManager = settingsManager
+            )
+        }
+
+        if (showAddProfile) AddProfileDialog(
+            profiles = profProfiles.toList(),
+            onConfirm = { n, e, u, isKid, pId -> 
+                profileManager.addProfile(Profile(name = n, icon = e, iconUri = u?.toString(), isKid = isKid, parentId = pId))
+                refreshProfiles()
+                showAddProfile = false 
+            }, 
+            onDismiss = { showAddProfile = false }
+        )
         if (showAddFolder) AddFolderDialog(onConfirm = { n, c -> profileManager.addFolder(currentProfile.id, Folder(name = n, color = c)); refreshProfiles(); showAddFolder = false }, onDismiss = { showAddFolder = false })
 
         showDeleteConfirm?.let { id ->
@@ -406,7 +521,8 @@ private fun CollectionPopup(
     onClose: () -> Unit,
     onAppClick: (AppInfo) -> Unit,
     onAppLongClick: (AppInfo) -> Unit,
-    onAddApps: () -> Unit
+    onAddApps: () -> Unit,
+    isLocked: Boolean = false
 ) {
     val folderApps = allApps.filter { it.packageName in folder.apps }
     val color = try { Color(AndroidColor.parseColor(folder.color)) } catch (_: Exception) { MaterialTheme.colorScheme.primary }
@@ -424,7 +540,7 @@ private fun CollectionPopup(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(folder.name.uppercase(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                     Spacer(modifier = Modifier.weight(1f))
-                    IconButton(onClick = onAddApps) { Icon(Icons.Filled.Edit, null, tint = color) }
+                    if (!isLocked) IconButton(onClick = onAddApps) { Icon(Icons.Filled.Edit, null, tint = color) }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
                 if (folderApps.isEmpty()) {
@@ -491,20 +607,66 @@ private fun AppSelectorOverlay(
 }
 
 @Composable
-fun BackgroundGlow(isDarkTheme: Boolean) {
+fun BackgroundGlow(isDarkTheme: Boolean, wallpaperType: String) {
     val infiniteTransition = rememberInfiniteTransition()
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(animation = tween(4000, easing = LinearEasing), repeatMode = RepeatMode.Reverse)
-    )
-
-    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        if (isDarkTheme) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(brush = Brush.radialGradient(colors = listOf(Color(0xFF00E5FF).copy(alpha = 0.15f * glowAlpha), Color.Transparent), center = center.copy(x = size.width * 0.2f, y = size.height * 0.2f), radius = size.width * 0.8f))
-                drawCircle(brush = Brush.radialGradient(colors = listOf(Color(0xFFD500F9).copy(alpha = 0.12f * glowAlpha), Color.Transparent), center = center.copy(x = size.width * 0.8f, y = size.height * 0.8f), radius = size.width * 0.7f))
+    when (wallpaperType) {
+        "MATRIX" -> MatrixRain()
+        "NEBULA" -> NebulaBackground()
+        else -> {
+            val glowAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.3f, targetValue = 0.6f,
+                animationSpec = infiniteRepeatable(animation = tween(4000, easing = LinearEasing), repeatMode = RepeatMode.Reverse)
+            )
+            Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                if (isDarkTheme) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(brush = Brush.radialGradient(colors = listOf(Color(0xFF00E5FF).copy(alpha = 0.15f * glowAlpha), Color.Transparent), center = center.copy(x = size.width * 0.2f, y = size.height * 0.2f), radius = size.width * 0.8f))
+                        drawCircle(brush = Brush.radialGradient(colors = listOf(Color(0xFFD500F9).copy(alpha = 0.12f * glowAlpha), Color.Transparent), center = center.copy(x = size.width * 0.8f, y = size.height * 0.8f), radius = size.width * 0.7f))
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+fun MatrixRain() {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            repeat(20) {
+                val x = (0..size.width.toInt()).random().toFloat()
+                drawLine(brush = Brush.verticalGradient(listOf(Color.Green.copy(alpha = 0.5f), Color.Transparent)), start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 2f)
+            }
+        }
+    }
+}
+
+@Composable
+fun NebulaBackground() {
+    val infiniteTransition = rememberInfiniteTransition()
+    val rotation by infiniteTransition.animateFloat(initialValue = 0f, targetValue = 360f, animationSpec = infiniteRepeatable(animation = tween(20000, easing = LinearEasing)))
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF050505))) {
+        Canvas(modifier = Modifier.fillMaxSize().graphicsLayer(rotationZ = rotation)) {
+            drawCircle(brush = Brush.radialGradient(listOf(Color(0xFF311B92).copy(alpha = 0.3f), Color.Transparent)), radius = size.width, center = center)
+        }
+    }
+}
+
+@Composable
+fun SpeedometerWidget(speed: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = speed.toString(), style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Black, color = if (speed > 120) Color.Red else MaterialTheme.colorScheme.primary, letterSpacing = (-2).sp)
+        Text(text = "KM/H", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun VisualizerWidget() {
+    val infiniteTransition = rememberInfiniteTransition()
+    Row(modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
+        repeat(40) {
+            val h by infiniteTransition.animateFloat(initialValue = 0.1f, targetValue = 1f, animationSpec = infiniteRepeatable(animation = tween(durationMillis = (400..1000).random(), easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse))
+            Box(modifier = Modifier.weight(1f).fillMaxHeight(h).clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)).background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), Color.Transparent))))
         }
     }
 }
@@ -518,7 +680,7 @@ fun ClockWidget(is24h: Boolean) {
             val cal = Calendar.getInstance()
             time = SimpleDateFormat(if (is24h) "HH:mm" else "hh:mm a", Locale.getDefault()).format(cal.time)
             date = SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(cal.time)
-            delay(10000L)
+            delay(10.seconds)
         }
     }
     Column(horizontalAlignment = Alignment.End) {
@@ -532,11 +694,21 @@ private fun LockDialog(onSuccess: () -> Unit, onDismiss: () -> Unit, settingsMan
     var passIn by remember { mutableStateOf("") }
     var authIn by remember { mutableStateOf("") }
     var isReset by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (isReset) "Reset Password" else "Enter Password", fontWeight = FontWeight.Bold) },
+    val lockType = settingsManager.getLockType()
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (isReset) "Reset Password" else if (lockType == "PIN") "Enter PIN" else "Enter Password", fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 if (!isReset) {
-                    OutlinedTextField(value = passIn, onValueChange = { passIn = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+                    OutlinedTextField(
+                        value = passIn, 
+                        onValueChange = { passIn = it }, 
+                        label = { Text(if (lockType == "PIN") "PIN" else "Password") }, 
+                        modifier = Modifier.fillMaxWidth(), 
+                        shape = RoundedCornerShape(12.dp),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = if (lockType == "PIN") androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Password
+                        )
+                    )
                     TextButton(onClick = { isReset = true }) { Text("Forgot password?") }
                 } else {
                     Text("Enter code from Google Authenticator.", style = MaterialTheme.typography.bodySmall)
@@ -545,7 +717,7 @@ private fun LockDialog(onSuccess: () -> Unit, onDismiss: () -> Unit, settingsMan
                 }
             }
         },
-        confirmButton = { Button(onClick = { if (!isReset) { if (passIn == settingsManager.getPassword()) onSuccess() } else { if (authIn.length == 6 && settingsManager.getSecretKey() != null) { settingsManager.setPassword(""); onSuccess() } } }, shape = RoundedCornerShape(12.dp)) { Text(if (isReset) "Reset & Enter" else "Unlock") } },
+        confirmButton = { Button(onClick = { if (!isReset) { if (passIn == settingsManager.getPassword()) onSuccess() } else { val secret = settingsManager.getSecretKey(); if (secret != null && TotpHelper.verifyCode(secret, authIn)) { settingsManager.setPassword(""); onSuccess() } } }, shape = RoundedCornerShape(12.dp)) { Text(if (isReset) "Reset & Enter" else "Unlock") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -559,7 +731,7 @@ private fun ProfileIcon(icon: String, uri: String?, size: Int = 40) {
 }
 
 @Composable
-private fun ProfileHeader(profile: Profile, onSwitchClick: () -> Unit, onOpenGuide: () -> Unit) {
+private fun ProfileHeader(profile: Profile, onSwitchClick: () -> Unit, onOpenGuide: () -> Unit, isLocked: Boolean = false) {
     Surface(modifier = Modifier.wrapContentWidth(), shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), tonalElevation = 8.dp, border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))) {
         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             var isFoc by remember { mutableStateOf(false) }
@@ -567,7 +739,7 @@ private fun ProfileHeader(profile: Profile, onSwitchClick: () -> Unit, onOpenGui
                 Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ProfileIcon(profile.icon, profile.iconUri, size = 32)
                     Text(profile.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-                    Icon(Icons.Filled.KeyboardArrowDown, null, modifier = Modifier.size(20.dp))
+                    Icon(if (isLocked) Icons.Filled.Lock else Icons.Filled.KeyboardArrowDown, null, modifier = Modifier.size(20.dp))
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
@@ -714,15 +886,29 @@ private fun AddFolderDialog(onConfirm: (String, String) -> Unit, onDismiss: () -
 
 @Composable
 private fun ProfileSwitcherDialog(profiles: List<Profile>, currentId: String, onSelect: (Profile) -> Unit, onAddProfile: () -> Unit, onStartGuest: () -> Unit, onDeleteProfile: (String) -> Unit, onDismiss: () -> Unit, isGuestHidden: Boolean) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Driver Selection", fontWeight = FontWeight.Black) },
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Passenger Selection", fontWeight = FontWeight.Black) },
         text = {
             Column {
                 profiles.forEach { p ->
                     val isCur = p.id == currentId
+                    val parent = if (p.isKid) profiles.find { it.id == p.parentId } else null
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onSelect(p) }, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = if (isCur) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)), border = if (isCur) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null) {
                         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) { ProfileIcon(p.icon, p.iconUri, size = 52); Column { Text(p.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black); Text(if (p.isGuest) "Guest" else "${p.pinnedApps.size} shortcuts", style = MaterialTheme.typography.labelMedium) } }
-                            if (!p.isGuest && !isCur) IconButton(onClick = { onDeleteProfile(p.id) }) { Icon(Icons.Filled.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) { 
+                                ProfileIcon(p.icon, p.iconUri, size = 52)
+                                Column { 
+                                    Text(p.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                                    if (p.isKid) {
+                                        Text("Kids Mode ${parent?.let { "• Under ${it.name}" } ?: ""}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        Text(if (p.isGuest) "Guest" else "${p.pinnedApps.size} shortcuts", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                } 
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (p.isProtected) Icon(Icons.Filled.Lock, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                if (!p.isGuest && !isCur) IconButton(onClick = { onDeleteProfile(p.id) }) { Icon(Icons.Filled.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) }
+                            }
                         }
                     }
                 }
@@ -738,15 +924,19 @@ private fun ProfileSwitcherDialog(profiles: List<Profile>, currentId: String, on
 }
 
 @Composable
-private fun AddProfileDialog(onConfirm: (String, String, Uri?) -> Unit, onDismiss: () -> Unit) {
+private fun AddProfileDialog(profiles: List<Profile>, onConfirm: (String, String, Uri?, Boolean, String?) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     val emojis = listOf("\uD83D\uDC64", "\uD83D\uDE97", "\uD83C\uDFCE\uFE0F", "\uD83D\uDDFA\uFE0F", "\uD83C\uDFB5", "\uD83D\uDC69\u200D\u2708\uFE0F", "\uD83D\uDC68\u200D\u2708\uFE0F")
     var selectedEmoji by remember { mutableStateOf(emojis[0]) }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    var isKid by remember { mutableStateOf(false) }
+    val adults = profiles.filter { !it.isKid && !it.isGuest }
+    var selectedParentId by remember { mutableStateOf(adults.firstOrNull()?.id) }
+
     val l = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { selectedUri = it }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Passenger Profile", fontWeight = FontWeight.Black) },
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("New Profile", fontWeight = FontWeight.Black) },
         text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Box(modifier = Modifier.size(90.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)).clickable { l.launch("image/*") }, contentAlignment = Alignment.Center) {
                     if (selectedUri != null) AsyncImage(model = selectedUri, null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     else Text(selectedEmoji, fontSize = 44.sp)
@@ -755,9 +945,33 @@ private fun AddProfileDialog(onConfirm: (String, String, Uri?) -> Unit, onDismis
                 Spacer(modifier = Modifier.height(24.dp))
                 OutlinedTextField(value = name, onValueChange = { if (it.length <= 15) name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
                 Spacer(modifier = Modifier.height(20.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { emojis.forEach { e -> val isS = e == selectedEmoji && selectedUri == null; Surface(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { selectedEmoji = e; selectedUri = null }, shape = CircleShape, color = if (isS) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color.Transparent, border = if (isS) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null) { Box(contentAlignment = Alignment.Center) { Text(e, fontSize = 24.sp) } } } }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("Child Profile", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Switch(checked = isKid, onCheckedChange = { isKid = it })
+                }
+                
+                if (isKid && adults.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Connected Parent:", style = MaterialTheme.typography.labelMedium, modifier = Modifier.align(Alignment.Start))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        items(adults.size) { idx ->
+                            val adult = adults[idx]
+                            val isSel = adult.id == selectedParentId
+                            FilterChip(
+                                selected = isSel,
+                                onClick = { selectedParentId = adult.id },
+                                label = { Text(adult.name) }
+                            )
+                        }
+                    }
+                }
             }
         },
-        confirmButton = { Button(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), selectedEmoji, selectedUri) }, enabled = name.isNotBlank(), shape = RoundedCornerShape(12.dp)) { Text("Create Profile") } },
+        confirmButton = { Button(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), selectedEmoji, selectedUri, isKid, selectedParentId) }, enabled = name.isNotBlank(), shape = RoundedCornerShape(12.dp)) { Text("Create Profile") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -778,5 +992,6 @@ private fun QuickStartGuide(onDismiss: () -> Unit) {
 }
 
 private data class GuideStep(val title: String, val description: String, val icon: ImageVector)
+
 fun Modifier.scale(s: Float) = this.then(Modifier.graphicsLayer(scaleX = s, scaleY = s))
 fun Modifier.size(s: androidx.compose.ui.unit.Dp) = this.then(Modifier.size(s, s))
