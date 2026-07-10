@@ -1,31 +1,19 @@
 # Build the CarDash Companion App
 
-This prompt tells you everything you need to build a phone remote control app for the **CarDash** tablet launcher. The companion app connects to the tablet over WiFi (HTTP) or Bluetooth LE and lets the user switch profiles, lock/unlock, control volume, launch apps, and put the tablet to sleep.
+Build a phone remote control app named **CarDash Remote** that connects to the CarDash tablet launcher over WiFi (HTTP) or Bluetooth LE. The app lets the user switch profiles, lock/unlock, control volume, launch apps, and put the tablet to sleep.
 
-## How to use this prompt
+This prompt is the complete specification — feed it to any AI coding agent. No need to read any tablet source code; the API contract is fully documented below.
 
-Feed this entire document to your AI coding agent. It contains:
-- The full API contract (no need to read the tablet source)
-- UI requirements
-- Android project setup
-- Implementation order
-- Deliverable checklist
+## Project setup
 
-## Where to build
+Create a standalone Android project from scratch:
 
-**Option A — Inside CarDash repo (preferred):**
-If you have access to the existing CarDash project at `https://github.com/jakubhegr18-design/CarDash.git`:
-- Clone the repo
-- Add a new `companion/` module (update `settings.gradle.kts` to `include(":companion")`)
-- Place source files under `companion/src/main/java/com/cartablet/companion/`
-- The root `build.gradle.kts` already has the `com.android.library` plugin. Add `android-application` for the module.
-
-**Option B — Standalone new project:**
-If building from scratch:
-- Create a new Android project with application ID `com.cartablet.companion`
-- Use Kotlin + Jetpack Compose (BOM 2024.02.00, Compose Compiler 1.5.10, Kotlin 1.9.22, AGP 8.2.2)
-- Min SDK 26, Target SDK 34, Compile SDK 34
-- App name "CarDash Remote"
+- **Application ID:** `com.cartablet.companion`
+- **App name:** "CarDash Remote"
+- **Language:** Kotlin
+- **UI:** Jetpack Compose (Material 3)
+- **Min SDK:** 26, **Target SDK:** 34, **Compile SDK:** 34
+- **Compose BOM:** 2024.02.00, **Compose Compiler:** 1.5.10, **Kotlin:** 1.9.22, **AGP:** 8.2.2
 
 ---
 
@@ -33,9 +21,7 @@ If building from scratch:
 
 ### WiFi / HTTP
 
-The tablet runs an embedded HTTP server (NanoHTTPD) on port 8080 (configurable). Base URL format: `http://<ip>:<port>`
-
-Base URL format: `http://<ip>:<port>`
+The tablet runs an embedded HTTP server (NanoHTTPD) on port 8080 (configurable). Base URL: `http://<ip>:<port>`
 
 #### Endpoints
 
@@ -153,7 +139,7 @@ Build a **portrait, scrollable** app with Material 3 (Jetpack Compose). Below is
 ## Implementation Order
 
 ### Step 1: Project Scaffolding
-- Set up the Android project (or `companion/` module if inside CarDash repo)
+- Set up the Android project
 - Configure `build.gradle.kts` with dependencies:
   - Material 3 Compose
   - Compose BOM 2024.02.00
@@ -219,8 +205,8 @@ Build a **portrait, scrollable** app with Material 3 (Jetpack Compose). Below is
 - Ensure the BLE client lifecycle is properly managed (stop scan on disconnect, cleanup on Activity destroy)
 
 ### Step 6: Build & Verify
-- Run `./gradlew :companion:assembleDebug` (or `./gradlew assembleDebug` for standalone)
-- Confirm APK is generated at `companion/build/outputs/apk/debug/companion-debug.apk` (or `app/build/...` for standalone)
+- Run `./gradlew assembleDebug`
+- Confirm APK is generated at `app/build/outputs/apk/debug/app-debug.apk`
 - Fix any compilation errors
 
 ---
@@ -240,7 +226,7 @@ The agent should produce these files:
 | `src/main/java/com/cartablet/companion/BleCompanionClient.kt` | BLE client |
 | `src/main/java/com/cartablet/companion/ui/RemoteControlScreen.kt` | Full Compose UI |
 
-**Final APK:** `companion/build/outputs/apk/debug/companion-debug.apk`
+**Final APK:** `app/build/outputs/apk/debug/app-debug.apk`
 
 ---
 
