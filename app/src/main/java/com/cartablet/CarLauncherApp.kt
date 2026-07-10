@@ -2,11 +2,10 @@ package com.cartablet
 
 import android.app.Application
 import android.content.SharedPreferences
-import android.net.wifi.WifiManager
-import android.text.format.Formatter
 import com.cartablet.data.ProfileManager
 import com.cartablet.data.SettingsManager
 import com.cartablet.utils.RemoteControlServer
+import com.cartablet.utils.BleControlServer
 import java.net.InetAddress
 import java.net.NetworkInterface
 
@@ -17,6 +16,8 @@ class CarLauncherApp : Application() {
     lateinit var settingsManager: SettingsManager
     var remoteServer: RemoteControlServer? = null
         private set
+    var bleServer: BleControlServer? = null
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -24,18 +25,33 @@ class CarLauncherApp : Application() {
         prefs = getSharedPreferences("cartablet_prefs", MODE_PRIVATE)
         profileManager = ProfileManager(prefs)
         settingsManager = SettingsManager(prefs)
-        updateRemoteServer()
+        updateRemoteServers()
     }
 
-    fun updateRemoteServer() {
+    fun updateRemoteServers() {
+        val enabled = settingsManager.isRemoteControlEnabled()
+        val mode = settingsManager.getRemoteControlMode()
+
+        // WiFi HTTP server
         remoteServer?.stop()
         remoteServer = null
-        if (settingsManager.isRemoteControlEnabled()) {
+        if (enabled && (mode == "WIFI" || mode == "BOTH")) {
             val port = settingsManager.getRemoteControlPort()
             val server = RemoteControlServer(this, profileManager, settingsManager, port)
             try {
                 server.start()
                 remoteServer = server
+            } catch (_: Exception) {}
+        }
+
+        // BLE server
+        bleServer?.stop()
+        bleServer = null
+        if (enabled && (mode == "BLE" || mode == "BOTH")) {
+            val server = BleControlServer(this, profileManager, settingsManager)
+            try {
+                server.start()
+                bleServer = server
             } catch (_: Exception) {}
         }
     }

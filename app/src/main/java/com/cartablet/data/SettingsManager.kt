@@ -24,6 +24,7 @@ class SettingsManager(private val prefs: SharedPreferences) {
         private const val KEY_STRICT_LOCK_COLLECTIONS = "strict_lock_collections"
         private const val KEY_REMOTE_CONTROL_ENABLED = "remote_control_enabled"
         private const val KEY_REMOTE_CONTROL_PORT = "remote_control_port"
+        private const val KEY_REMOTE_CONTROL_MODE = "remote_control_mode"
         private const val KEY_TV_MODE = "tv_mode"
     }
 
@@ -93,6 +94,9 @@ class SettingsManager(private val prefs: SharedPreferences) {
 
     fun getRemoteControlPort(): Int = prefs.getInt(KEY_REMOTE_CONTROL_PORT, 8080)
     fun setRemoteControlPort(port: Int) = prefs.edit().putInt(KEY_REMOTE_CONTROL_PORT, port).apply()
+
+    fun getRemoteControlMode(): String = prefs.getString(KEY_REMOTE_CONTROL_MODE, "WIFI") ?: "WIFI"
+    fun setRemoteControlMode(mode: String) = prefs.edit().putString(KEY_REMOTE_CONTROL_MODE, mode).apply()
 
     fun isTvModeEnabled(): Boolean = prefs.getBoolean(KEY_TV_MODE, false)
     fun setTvModeEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_TV_MODE, enabled).apply()

@@ -1,9 +1,12 @@
 package com.cartablet.companion.ui
 
-import androidx.compose.foundation.background
+import android.Manifest
+import android.bluetooth.BluetoothDevice
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -14,38 +17,56 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.cartablet.companion.BleCompanionClient
 import com.cartablet.companion.CompanionClient
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RemoteControlScreen() {
+    val context = LocalContext.current
+    var connectionMode by remember { mutableStateOf("WIFI") }
+
+    // WiFi state
     var tabletIp by remember { mutableStateOf("") }
+    var wifiClient by remember { mutableStateOf<CompanionClient?>(null) }
+
+    // BLE state
+    var bleClient by remember { mutableStateOf<BleCompanionClient?>(null) }
+    var discoveredDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
+    var isScanning by remember { mutableStateOf(false) }
+
+    // Shared state
     var connected by remember { mutableStateOf(false) }
-    var client by remember { mutableStateOf<CompanionClient?>(null) }
     var status by remember { mutableStateOf<JSONObject?>(null) }
     var profiles by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var volumeLevel by remember { mutableIntStateOf(50) }
     var statusMessage by remember { mutableStateOf("") }
+    var blePermissionGranted by remember { mutableStateOf(false) }
 
-    fun connect() {
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> blePermissionGranted = granted }
+
+    fun connectWifi() {
         val ip = tabletIp.trim()
         if (ip.isBlank()) return
         val c = CompanionClient(ip)
         c.getStatus { s ->
             if (s != null) {
                 status = s
-                client = c
+                wifiClient = c
                 connected = true
                 statusMessage = "Connected"
-                // Load profiles
                 c.getProfiles { p ->
                     if (p != null) {
                         val arr = p.optJSONArray("profiles")
@@ -60,21 +81,79 @@ fun RemoteControlScreen() {
         }
     }
 
+    fun startBleScan() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(Manifest.permission.BLUETOOTH_SCAN)
+            return
+        }
+        blePermissionGranted = true
+        val client = BleCompanionClient(context)
+        client.onDeviceFound = { _, device ->
+            discoveredDevices = (discoveredDevices + device).distinctBy { it.address }
+        }
+        client.onConnected = { success ->
+            connected = success
+            statusMessage = if (success) "Connected" else "Service not found"
+        }
+        client.onDisconnected = {
+            connected = false
+            statusMessage = "Disconnected"
+        }
+        client.onStatusUpdate = { s ->
+            if (s != null) status = s
+        }
+        client.onProfilesUpdate = { p ->
+            if (p != null) {
+                val arr = p.optJSONArray("profiles")
+                profiles = if (arr != null) {
+                    (0 until arr.length()).map { arr.getJSONObject(it) }
+                } else emptyList()
+            }
+        }
+        client.onCommandResult = { r ->
+            statusMessage = r?.optString("success", "false")?.let {
+                if (it == "true") "OK" else "Failed: ${r.optString("error")}"
+            } ?: "Failed"
+        }
+        bleClient = client
+        isScanning = true
+        discoveredDevices = emptyList()
+        client.startScan()
+    }
+
+    fun connectBle(device: BluetoothDevice) {
+        bleClient?.connect(device)
+        isScanning = false
+        statusMessage = "Connecting..."
+    }
+
     fun disconnect() {
-        client = null
+        wifiClient = null
+        bleClient?.disconnect()
+        bleClient = null
         connected = false
         status = null
         profiles = emptyList()
         statusMessage = "Disconnected"
+        isScanning = false
+        discoveredDevices = emptyList()
     }
 
-    fun sendAction(action: (CompanionClient, (Boolean) -> Unit) -> Unit) {
-        client?.let { c ->
+    // WiFi actions
+    fun wifiAction(action: (CompanionClient, (Boolean) -> Unit) -> Unit) {
+        wifiClient?.let { c ->
             action(c) { success ->
                 statusMessage = if (success) "OK" else "Failed"
                 if (success) c.getStatus { s -> if (s != null) status = s }
             }
         }
+    }
+
+    // BLE actions
+    fun bleAction(action: (BleCompanionClient) -> Unit) {
+        bleClient?.let { action(it) }
     }
 
     Surface(
@@ -96,26 +175,86 @@ fun RemoteControlScreen() {
                 textAlign = TextAlign.Center
             )
 
-            // Connection
+            // Mode selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                val modes = listOf("WIFI" to "WiFi", "BLE" to "BLE")
+                modes.forEach { (mode, label) ->
+                    FilterChip(
+                        selected = connectionMode == mode,
+                        onClick = { if (!connected) { connectionMode = mode; statusMessage = "" } },
+                        label = { Text(label) },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+            }
+
+            // Connection panel
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!connected) {
-                        OutlinedTextField(
-                            value = tabletIp,
-                            onValueChange = { tabletIp = it },
-                            label = { Text("Tablet IP:Port") },
-                            placeholder = { Text("192.168.1.100:8080") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-                        Button(
-                            onClick = { connect() },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("CONNECT") }
+                        if (connectionMode == "WIFI") {
+                            OutlinedTextField(
+                                value = tabletIp,
+                                onValueChange = { tabletIp = it },
+                                label = { Text("Tablet IP:Port") },
+                                placeholder = { Text("192.168.1.100:8080") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            Button(
+                                onClick = { connectWifi() },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("CONNECT") }
+                        } else {
+                            Button(
+                                onClick = {
+                                    if (isScanning) {
+                                        bleClient?.stopScan()
+                                        isScanning = false
+                                    } else {
+                                        startBleScan()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text(if (isScanning) "STOP SCAN" else "SCAN FOR DEVICES") }
+
+                            if (isScanning) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+
+                            if (discoveredDevices.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Found devices:", style = MaterialTheme.typography.labelMedium)
+                                discoveredDevices.forEach { device ->
+                                    OutlinedButton(
+                                        onClick = { connectBle(device) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Bluetooth, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(device.name ?: "CarDash")
+                                    }
+                                }
+                            }
+
+                            if (!isScanning && discoveredDevices.isEmpty() && !connected) {
+                                Text(
+                                    "Make sure Bluetooth is on and tablet has BLE mode enabled in settings",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     } else {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -123,7 +262,11 @@ fun RemoteControlScreen() {
                         ) {
                             Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Connected to $tabletIp", fontWeight = FontWeight.Bold)
+                            Text(
+                                if (connectionMode == "WIFI") "Connected to $tabletIp"
+                                else "Connected via BLE",
+                                fontWeight = FontWeight.Bold
+                            )
                             Spacer(modifier = Modifier.weight(1f))
                             FilledTonalButton(onClick = { disconnect() }) { Text("DISCONNECT") }
                         }
@@ -149,20 +292,41 @@ fun RemoteControlScreen() {
                 StatusCard(s)
 
                 // Profile switching
-                ProfileSwitcher(profiles, { sendAction { c, cb -> c.switchProfile(it, cb) } })
+                ProfileSwitcher(profiles,
+                    onSwitch = { id ->
+                        if (connectionMode == "WIFI") {
+                            wifiAction { c, cb -> c.switchProfile(id, cb) }
+                        } else {
+                            bleClient?.switchProfile(id)
+                        }
+                    }
+                )
 
                 // Control buttons
                 ControlButtons(
                     isLocked = s.optBoolean("isLocked", false),
-                    onLock = { sendAction { c, cb -> c.lock(cb) } },
-                    onUnlock = { sendAction { c, cb -> c.unlock(cb) } },
-                    onSleep = { sendAction { c, cb -> c.sleep(cb) } }
+                    onLock = {
+                        if (connectionMode == "WIFI") wifiAction { c, cb -> c.lock(cb) }
+                        else bleClient?.lock()
+                    },
+                    onUnlock = {
+                        if (connectionMode == "WIFI") wifiAction { c, cb -> c.unlock(cb) }
+                        else bleClient?.unlock()
+                    },
+                    onSleep = {
+                        if (connectionMode == "WIFI") wifiAction { c, cb -> c.sleep(cb) }
+                        else bleClient?.sleep()
+                    }
                 )
 
                 // Volume
                 VolumeControl(volumeLevel) { level ->
                     volumeLevel = level
-                    sendAction { c, cb -> c.setVolume(level, cb) }
+                    if (connectionMode == "WIFI") {
+                        wifiAction { c, cb -> c.setVolume(level, cb) }
+                    } else {
+                        bleClient?.setVolume(level)
+                    }
                 }
             }
         }

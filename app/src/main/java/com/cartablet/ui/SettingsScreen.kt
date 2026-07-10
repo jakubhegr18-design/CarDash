@@ -56,6 +56,7 @@ fun SettingsScreen(
     var strictLockCollections by remember { mutableStateOf(settingsManager.getStrictLockCollections()) }
     var remoteControlEnabled by remember { mutableStateOf(settingsManager.isRemoteControlEnabled()) }
     var remoteControlPort by remember { mutableStateOf(settingsManager.getRemoteControlPort().toString()) }
+    var remoteControlMode by remember { mutableStateOf(settingsManager.getRemoteControlMode()) }
     var tvModeEnabled by remember { mutableStateOf(settingsManager.isTvModeEnabled()) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
 
@@ -274,38 +275,67 @@ fun SettingsScreen(
             SettingsSection(title = "REMOTE CONTROL", icon = Icons.Filled.Cast) {
                 SettingsSwitchItem(
                     title = "Enable Remote Control",
-                    description = "Allow phone app to control the dashboard over WiFi",
+                    description = "Allow phone app to control the dashboard",
                     checked = remoteControlEnabled,
                     onCheckedChange = {
                         remoteControlEnabled = it
                         settingsManager.setRemoteControlEnabled(it)
-                        CarLauncherApp.instance.updateRemoteServer()
+                        CarLauncherApp.instance.updateRemoteServers()
                     }
                 )
 
                 if (remoteControlEnabled) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = remoteControlPort,
-                        onValueChange = {
-                            remoteControlPort = it
-                            it.toIntOrNull()?.let { port ->
-                                settingsManager.setRemoteControlPort(port)
-                                CarLauncherApp.instance.updateRemoteServer()
-                            }
-                        },
-                        label = { Text("Port") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
+                    Text("Connection Mode", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val modes = listOf("WIFI" to "WiFi", "BLE" to "BLE", "BOTH" to "Both")
+                        modes.forEach { (mode, label) ->
+                            FilterChip(
+                                selected = remoteControlMode == mode,
+                                onClick = {
+                                    remoteControlMode = mode
+                                    settingsManager.setRemoteControlMode(mode)
+                                    CarLauncherApp.instance.updateRemoteServers()
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
 
-                    val ip = CarLauncherApp.instance.getLocalIpAddress()
-                    if (ip != null) {
+                    if (remoteControlMode == "WIFI" || remoteControlMode == "BOTH") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = remoteControlPort,
+                            onValueChange = {
+                                remoteControlPort = it
+                                it.toIntOrNull()?.let { port ->
+                                    settingsManager.setRemoteControlPort(port)
+                                    CarLauncherApp.instance.updateRemoteServers()
+                                }
+                            },
+                            label = { Text("Port") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+
+                        val ip = CarLauncherApp.instance.getLocalIpAddress()
+                        if (ip != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Connect at: http://$ip:$remoteControlPort",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    if (remoteControlMode == "BLE" || remoteControlMode == "BOTH") {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "Connect at: http://$ip:$remoteControlPort",
+                            "BLE advertising as 'CarDash'",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.secondary
                         )
                     }
                 }
